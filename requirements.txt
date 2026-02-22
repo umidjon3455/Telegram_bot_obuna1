@@ -1,0 +1,19 @@
+# Core
+aiogram==3.13.1
+aiohttp==3.10.10
+
+# Database
+asyncpg==0.29.0
+
+# Redis (FSM + cache)
+redis==5.2.0
+aiogram-redis-storage==0.1.0
+
+# Config
+python-dotenv==1.0.1
+
+# Charts (optional — comment out if not needed)
+matplotlib==3.9.2
+
+# Production server (optional — for VPS nginx proxy)
+# gunicorn==22.0.0
