@@ -1,80 +1,90 @@
-"""
-Cache layer without Redis.
-- FSM storage and caching simulated in-memory
-"""
+"""Redis-backed cache helpers used by the Telegram bot."""
 import json
 import logging
-from typing import Optional, Any
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+from redis.asyncio import Redis
 
-_cache = {}
-SUBSCRIPTION_TTL = 60  # seconds
-import aioredis
 from config import config
 
-_redis = None
+logger = logging.getLogger(__name__)
+SUBSCRIPTION_TTL = 60
+VIDEO_TTL = 300
+BAN_TTL = 120
+_redis: Optional[Redis] = None
 
-async def init_redis():
+
+async def init_redis() -> Redis:
+    """Create and verify the shared Redis connection."""
     global _redis
-    if not config.REDIS_URL:
-        _redis = None
-    else:
-        _redis = await aioredis.from_url(config.REDIS_URL)
+    if _redis is None:
+        _redis = Redis.from_url(config.REDIS_URL, decode_responses=True)
+    await _redis.ping()
     return _redis
-############################
+
+
+def get_redis() -> Redis:
+    """Return the initialized Redis connection."""
+    if _redis is None:
+        raise RuntimeError("Redis has not been initialized. Call init_redis() first.")
+    return _redis
+
+
+async def close_redis() -> None:
+    """Close the shared Redis connection during application shutdown."""
+    global _redis
+    if _redis is not None:
+        await _redis.aclose()
+        _redis = None
+
 
 async def cache_subscription(user_id: int, result: bool):
-    _cache[f"sub:{user_id}"] = {"value": result, "ttl": SUBSCRIPTION_TTL}
+    await get_redis().setex(f"sub:{user_id}", SUBSCRIPTION_TTL, json.dumps(result))
+
 
 async def get_cached_subscription(user_id: int) -> Optional[bool]:
-    entry = _cache.get(f"sub:{user_id}")
-    if not entry:
-        return None
-    return entry["value"]
+    value = await get_redis().get(f"sub:{user_id}")
+    return None if value is None else json.loads(value)
+
 
 async def invalidate_subscription(user_id: int):
-    _cache.pop(f"sub:{user_id}", None)
+    await get_redis().delete(f"sub:{user_id}")
 
-# ─── Video cache ──────────────────────────────────────────────────────────────
-VIDEO_TTL = 300  # 5 minutes
 
 async def cache_video(code: str, data: dict):
-    _cache[f"video:{code}"] = {"value": json.dumps(data, default=str), "ttl": VIDEO_TTL}
+    await get_redis().setex(f"video:{code}", VIDEO_TTL, json.dumps(data, default=str))
+
 
 async def get_cached_video(code: str) -> Optional[dict]:
-    entry = _cache.get(f"video:{code}")
-    if not entry:
-        return None
-    return json.loads(entry["value"])
+    value = await get_redis().get(f"video:{code}")
+    return None if value is None else json.loads(value)
+
 
 async def invalidate_video(code: str):
-    _cache.pop(f"video:{code}", None)
+    await get_redis().delete(f"video:{code}")
 
-# ─── Ban cache ────────────────────────────────────────────────────────────────
-BAN_TTL = 120
 
 async def cache_ban_status(user_id: int, banned: bool):
-    _cache[f"ban:{user_id}"] = {"value": banned, "ttl": BAN_TTL}
+    await get_redis().setex(f"ban:{user_id}", BAN_TTL, json.dumps(banned))
+
 
 async def get_cached_ban(user_id: int) -> Optional[bool]:
-    entry = _cache.get(f"ban:{user_id}")
-    if not entry:
-        return None
-    return entry["value"]
+    value = await get_redis().get(f"ban:{user_id}")
+    return None if value is None else json.loads(value)
+
 
 async def invalidate_ban(user_id: int):
-    _cache.pop(f"ban:{user_id}", None)
+    await get_redis().delete(f"ban:{user_id}")
 
-# ─── Broadcast progress ───────────────────────────────────────────────────────
+
 async def set_broadcast_progress(sent: int, failed: int, total: int):
-    _cache["broadcast:progress"] = {"sent": sent, "failed": failed, "total": total}
+    await get_redis().hset("broadcast:progress", mapping={"sent": sent, "failed": failed, "total": total})
+
 
 async def get_broadcast_progress() -> Optional[dict]:
-    entry = _cache.get("broadcast:progress")
-    if not entry:
-        return None
-    return entry
+    value = await get_redis().hgetall("broadcast:progress")
+    return None if not value else {key: int(item) for key, item in value.items()}
+
 
 async def clear_broadcast_progress():
-    _cache.pop("broadcast:progress", None)
+    await get_redis().delete("broadcast:progress")
